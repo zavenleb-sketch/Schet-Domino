@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import kotlinx.coroutines.delay
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -120,6 +121,41 @@ private fun captureGroups(table: List<Card>, selected: Set<Int>, rank: Int): Lis
     return partition(remaining)
 }
 
+// A simple deterministic bot: prefer capturing the most table cards, then points.
+private fun botMove(g: TabrGame): Pair<Int,List<List<Int>>> {
+    var bestIndex = 0
+    var bestGroups: List<List<Int>> = emptyList()
+    var bestValue = Int.MIN_VALUE
+    g.hands[g.turn].forEachIndexed { handIndex, card ->
+        val candidates = g.table.indices.filter { g.table[it].rank <= card.rank }
+        val groups = mutableListOf<List<Int>>()
+        fun search(start: Int, sum: Int, chosen: List<Int>) {
+            if(sum == card.rank) { groups.add(chosen); return }
+            if(sum > card.rank) return
+            for(i in start until candidates.size)
+                search(i+1, sum+g.table[candidates[i]].rank, chosen+candidates[i])
+        }
+        search(0,0,emptyList())
+        val used = mutableSetOf<Int>()
+        val picked = mutableListOf<List<Int>>()
+        groups.sortedWith(compareByDescending<List<Int>> { it.size }.thenBy { it.firstOrNull() ?: 0 }).forEach { group ->
+            if(group.none { it in used }) { picked.add(group); used.addAll(group) }
+        }
+        val points = used.sumOf { i ->
+            val t = g.table[i]
+            when {
+                t.rank == 1 -> 3
+                t.rank == 10 && t.suit == Suit.DIAMONDS -> 4
+                t.rank == 2 && t.suit == Suit.CLUBS -> 3
+                else -> 0
+            }
+        }
+        val value = used.size * 10 + points + if(used.isNotEmpty() && used.size == g.table.size) 30 else 0
+        if(value > bestValue) { bestValue = value; bestIndex = handIndex; bestGroups = picked }
+    }
+    return bestIndex to bestGroups
+}
+
 @Composable
 fun TabrScreen() {
     var game by remember { mutableStateOf<TabrGame?>(null) }
@@ -129,7 +165,40 @@ fun TabrScreen() {
     var target by remember { mutableIntStateOf(31) }
     var message by remember { mutableStateOf("Выберите карты стола, затем свою карту") }
     var claimant by remember { mutableIntStateOf(-1) }
+    var bots by remember { mutableStateOf(true) }
+    var claimSeconds by remember { mutableIntStateOf(7) }
     val g = game
+    // A pending claim freezes turns. Timer is restarted for every new claim window.
+    LaunchedEffect(g,revision,bots) {
+        val active = g ?: return@LaunchedEffect
+        if(!bots || active.roundOver || active.matchOver) return@LaunchedEffect
+        if(active.missed != null) {
+            claimSeconds = 7
+            repeat(7) {
+                delay(1000)
+                if(active.missed == null) return@LaunchedEffect
+                claimSeconds = 6-it
+            }
+            if(active.missed != null) {
+                active.passClaims()
+                selected = emptySet()
+                claimant = -1
+                message = "Время перехвата истекло"
+                revision++
+            }
+        } else if(active.turn != 0) {
+            delay(3000)
+            if(active.missed == null && !active.roundOver && !active.matchOver && active.turn != 0) {
+                val (index,groups) = botMove(active)
+                val actor = active.turn
+                active.play(index,groups)
+                selected = emptySet()
+                claimant = -1
+                message = if(active.missed != null) "Бот №${actor+1} пропустил комбинацию!" else "Бот №${actor+1} сделал ход"
+                revision++
+            }
+        }
+    }
     Column(Modifier.fillMaxSize().background(ink).padding(horizontal = 12.dp, vertical = 5.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Row(Modifier.fillMaxWidth(),verticalAlignment = Alignment.CenterVertically,horizontalArrangement = Arrangement.SpaceBetween) {
             Text("ТАБР",fontSize = 25.sp,fontWeight = FontWeight.Black,color = gold)
@@ -155,13 +224,17 @@ fun TabrScreen() {
                     Button(onClick = { target = points },colors = ButtonDefaults.buttonColors(containerColor = if(target == points) gold else Color.DarkGray,contentColor = if(target == points) ink else ivory)) { Text(points.toString()) }
                 }
             }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Против ботов",color = ivory,fontSize = 14.sp)
+                Switch(checked = bots,onCheckedChange = { bots = it })
+            }
             Spacer(Modifier.height(6.dp))
             Button(onClick = { game = TabrGame(mode,target).also { it.startRound() }; selected = emptySet(); revision++; message = "Выберите карты стола, затем свою карту" },colors = ButtonDefaults.buttonColors(containerColor = gold,contentColor = ink)) { Text("НАЧАТЬ ИГРУ") }
-            Text("Локальная версия: игроки ходят по очереди на одном телефоне",color = Color.LightGray,fontSize = 11.sp)
+            Text(if(bots) "Вы — игрок №1. Остальные игроки — боты." else "Локальная версия: игроки ходят по очереди на одном телефоне",color = Color.LightGray,fontSize = 11.sp)
         } else {
             val currentRevision = revision
             val tableCards = remember(g,currentRevision) { g.table.toList() }
-            val handCards = remember(g,currentRevision) { g.hands[g.turn].toList() }
+            val handCards = remember(g,currentRevision,bots) { if(bots && g.turn != 0) emptyList() else g.hands[g.turn].toList() }
             val turn = g.turn
             val pending = g.missed
             BoxWithConstraints(Modifier.fillMaxWidth().weight(1f).background(felt,RoundedCornerShape(28.dp))
@@ -184,17 +257,17 @@ fun TabrScreen() {
                     Text("КАРТЫ НА СТОЛЕ · ${tableCards.size}",color = gold,fontSize = 10.sp)
                     if(tableCards.isEmpty()) Text("Стол пуст",color = ivory)
                     Fan(tableCards,selected,Modifier.fillMaxWidth()) { i ->
-                        if(!g.roundOver) selected = if(i in selected) selected-i else selected+i
+                        if(!g.roundOver && (!bots || g.missed != null || g.turn == 0)) selected = if(i in selected) selected-i else selected+i
                     }
                 }
-                Text(if(pending != null) "ПЕРЕХВАТ · ХОД ИГРОКА ${pending.actor+1}" else "ИГРОК ${turn+1} · ВАШ ХОД",color = gold,fontSize = 11.sp,fontWeight = FontWeight.Bold,
+                Text(if(pending != null) "ПЕРЕХВАТ · ХОД ИГРОКА ${pending.actor+1}" else if(bots && turn != 0) "БОТ ${turn+1} ДУМАЕТ..." else "ИГРОК ${turn+1} · ВАШ ХОД",color = gold,fontSize = 11.sp,fontWeight = FontWeight.Bold,
                     modifier = Modifier.align(Alignment.BottomCenter).background(ink,RoundedCornerShape(topStart = 10.dp,topEnd = 10.dp)).padding(horizontal = 14.dp,vertical = 3.dp))
             }
             Spacer(Modifier.height(4.dp))
             Row(Modifier.fillMaxWidth(),verticalAlignment = Alignment.CenterVertically) {
-                Text("Игрок ${turn+1}",color = gold,fontSize = 12.sp)
+                Text(if(bots && turn != 0) "Бот ${turn+1}" else "Игрок ${turn+1}",color = gold,fontSize = 12.sp)
                 Fan(handCards,emptySet(),Modifier.weight(1f)) { i ->
-                    if(g.roundOver || g.matchOver || g.missed != null) return@Fan
+                    if(g.roundOver || g.matchOver || g.missed != null || (bots && g.turn != 0)) return@Fan
                     val card = handCards.getOrNull(i) ?: return@Fan
                     val index = g.hands[g.turn].indexOf(card)
                     if(index < 0) { message = "Повторите выбор карты"; return@Fan }
@@ -219,19 +292,20 @@ fun TabrScreen() {
                     }
                 }
                 TextButton(onClick = { selected = emptySet() }) { Text("Сброс",color = gold,fontSize = 11.sp) }
-                if(g.roundOver && !g.matchOver) Button(onClick = { g.startRound(); selected = emptySet(); revision++ },colors = ButtonDefaults.buttonColors(containerColor = gold,contentColor = ink)) { Text("Новая раздача",fontSize = 11.sp) }
+                if(g.roundOver && !g.matchOver) Button(onClick = { g.startRound(); selected = emptySet(); claimant = -1; revision++ },colors = ButtonDefaults.buttonColors(containerColor = gold,contentColor = ink)) { Text("Новая раздача",fontSize = 11.sp) }
                 if(g.matchOver) Text("Матч окончен",color = gold)
             }
             if(pending != null) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                    Text("Перехват:",color = gold,fontSize = 11.sp)
-                    (0 until g.players).filter { it != pending.actor }.forEach { p ->
+                    Text(if(bots) "Перехват: ${claimSeconds} с" else "Перехват:",color = gold,fontSize = 11.sp)
+                    (0 until g.players).filter { it != pending.actor && (!bots || it == 0) }.forEach { p ->
                         Button(onClick = { claimant = p; message = "Игрок ${p+1}: выберите пропущенные карты на столе" },
                             contentPadding = PaddingValues(horizontal = 9.dp,vertical = 0.dp),
                             colors = ButtonDefaults.buttonColors(containerColor = if(claimant == p) gold else Color.DarkGray,contentColor = if(claimant == p) ink else ivory),
                             modifier = Modifier.height(32.dp)) { Text("№${p+1}",fontSize = 11.sp) }
                     }
                     Button(onClick = {
+                        if(bots && claimant == -1 && pending.actor != 0) claimant = 0
                         if(claimant !in 0 until g.players || claimant == pending.actor) {
                             message = "Сначала выберите игрока-перехватчика"
                         } else {
