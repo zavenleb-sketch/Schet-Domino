@@ -141,9 +141,10 @@ private fun botMove(g: TabrGame): Pair<Int,List<List<Int>>> {
         groups.sortedWith(compareByDescending<List<Int>> { it.size }.thenBy { it.firstOrNull() ?: 0 }).forEach { group ->
             if(group.none { it in used }) { picked.add(group); used.addAll(group) }
         }
-        val points = used.sumOf { i ->
+        var points = 0
+        for(i in used) {
             val t = g.table[i]
-            when {
+            points += when {
                 t.rank == 1 -> 3
                 t.rank == 10 && t.suit == Suit.DIAMONDS -> 4
                 t.rank == 2 && t.suit == Suit.CLUBS -> 3
