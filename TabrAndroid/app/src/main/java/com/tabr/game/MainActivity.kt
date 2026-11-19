@@ -127,7 +127,8 @@ fun TabrScreen() {
     var selected by remember { mutableStateOf(setOf<Int>()) }
     var mode by remember { mutableIntStateOf(2) }
     var target by remember { mutableIntStateOf(31) }
-    var message by remember { mutableStateOf("Выберите карты стола, затем свою карту") }\n    var claimant by remember { mutableIntStateOf(-1) }
+    var message by remember { mutableStateOf("Выберите карты стола, затем свою карту") }
+    var claimant by remember { mutableIntStateOf(-1) }
     val g = game
     Column(Modifier.fillMaxSize().background(ink).padding(horizontal = 12.dp, vertical = 5.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Row(Modifier.fillMaxWidth(),verticalAlignment = Alignment.CenterVertically,horizontalArrangement = Arrangement.SpaceBetween) {
@@ -161,7 +162,8 @@ fun TabrScreen() {
             val currentRevision = revision
             val tableCards = remember(g,currentRevision) { g.table.toList() }
             val handCards = remember(g,currentRevision) { g.hands[g.turn].toList() }
-            val turn = g.turn\n            val pending = g.missed
+            val turn = g.turn
+            val pending = g.missed
             BoxWithConstraints(Modifier.fillMaxWidth().weight(1f).background(felt,RoundedCornerShape(28.dp))
                 .border(2.dp,gold,RoundedCornerShape(28.dp))) {
                 val w = maxWidth
