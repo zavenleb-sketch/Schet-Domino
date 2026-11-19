@@ -89,6 +89,37 @@ private fun OpponentSeat(player: Int, count: Int, active: Boolean, modifier: Mod
     }
 }
 
+
+// Split selected table cards into independent groups matching the played rank.
+// For example, playing 10 can capture [6,4] and [10] together.
+private fun captureGroups(table: List<Card>, selected: Set<Int>, rank: Int): List<List<Int>>? {
+    if(selected.isEmpty()) return emptyList()
+    if(selected.any { it !in table.indices }) return null
+    val remaining = selected.sorted()
+    fun partition(indices: List<Int>): List<List<Int>>? {
+        if(indices.isEmpty()) return emptyList()
+        val first = indices.first()
+        val others = indices.drop(1)
+        fun choose(pos: Int, sum: Int, group: List<Int>): List<List<Int>>? {
+            if(sum == rank) {
+                val rest = indices.filterNot { it in group }
+                val tail = partition(rest)
+                if(tail != null) return listOf(group) + tail
+                return null
+            }
+            if(sum > rank) return null
+            for(i in pos until others.size) {
+                val candidate = others[i]
+                val found = choose(i+1, sum + table[candidate].rank, group + candidate)
+                if(found != null) return found
+            }
+            return null
+        }
+        return choose(0, table[first].rank, listOf(first))
+    }
+    return partition(remaining)
+}
+
 @Composable
 fun TabrScreen() {
     var game by remember { mutableStateOf<TabrGame?>(null) }
@@ -165,9 +196,9 @@ fun TabrScreen() {
                     val card = handCards.getOrNull(i) ?: return@Fan
                     val index = g.hands[g.turn].indexOf(card)
                     if(index < 0) { message = "Повторите выбор карты"; return@Fan }
-                    val groups = if(selected.isEmpty()) emptyList() else listOf(selected.sorted())
-                    if(groups.isNotEmpty() && !g.legal(groups,card.rank)) {
-                        message = "Сумма выбранных карт должна быть ${card.rank}"
+                    val groups = captureGroups(g.table,selected,card.rank)
+                    if(groups == null || (groups.isNotEmpty() && !g.legal(groups,card.rank))) {
+                        message = "Выбранные карты должны разбиваться на комбинации по ${card.rank}"
                         return@Fan
                     }
                     try {
