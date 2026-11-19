@@ -19,7 +19,7 @@ class TabrGame(val players: Int, val target: Int) {
     var roundOver = false; private set
     var matchOver = false; private set
     var round = 0; private set
-    data class Missed(val actor: Int, val rank: Int)
+    data class Missed(val actor: Int, val rank: Int, val playedOnTable: Boolean, val playedCard: Card)\n    private var awaitingTurnAdvance = false
     var missed: Missed? = null; private set
     fun team(player: Int) = if(players == 4) player % 2 else player
     fun startRound() {
@@ -44,21 +44,39 @@ class TabrGame(val players: Int, val target: Int) {
         val cap = if(target == 31) 21 else 33
         if(scores[team(p)] < cap) scores[team(p)]++
     }
+    private fun hasCombination(rank: Int, excluded: Int? = null): Boolean {
+        val candidates = table.indices.filter { it != excluded && table[it].rank <= rank }
+        fun find(start: Int, sum: Int): Boolean {
+            if(sum == rank) return true
+            if(sum > rank) return false
+            for(i in start until candidates.size)
+                if(find(i+1, sum + table[candidates[i]].rank)) return true
+            return false
+        }
+        return find(0,0)
+    }
     fun play(index: Int, groups: List<List<Int>> = emptyList()) {
-        require(!roundOver && !matchOver && index in hands[turn].indices)
+        require(!roundOver && !matchOver && missed == null && index in hands[turn].indices)
         val actor = turn
         val rank = hands[actor][index].rank
         require(groups.isEmpty() || legal(groups,rank))
-        missed = null
         val played = hands[actor].removeAt(index)
-        if(groups.isEmpty()) table.add(played) else {
+        val onTable = groups.isEmpty()
+        if(onTable) table.add(played) else {
             piles[actor].add(played)
             groups.flatten().sortedDescending().forEach { piles[actor].add(table.removeAt(it)) }
             lastCaptor = actor
             val finalMove = deck.isEmpty() && hands.all { it.isEmpty() }
             if(table.isEmpty() && !finalMove) awardTabr(actor)
-            if(table.isNotEmpty()) missed = Missed(actor,rank)
         }
+        val playedIndex = if(onTable) table.lastIndex else null
+        if(hasCombination(rank,playedIndex)) {
+            missed = Missed(actor,rank,onTable,played)
+            awaitingTurnAdvance = true
+        } else advance()
+    }
+    private fun advance() {
+        awaitingTurnAdvance = false
         if(hands.all { it.isEmpty() }) {
             if(deck.isEmpty()) {
                 lastCaptor?.let { piles[it].addAll(table); table.clear() }
@@ -67,13 +85,37 @@ class TabrGame(val players: Int, val target: Int) {
             } else { deal(); turn = starter }
         } else turn = (turn + 1) % players
     }
+    fun passClaims() {
+        require(missed != null && awaitingTurnAdvance)
+        missed = null
+        advance()
+    }
     fun claimMissed(claimant: Int, groups: List<List<Int>>) {
         val m = requireNotNull(missed)
-        require(claimant in 0 until players && claimant != m.actor && legal(groups,m.rank))
-        groups.flatten().sortedDescending().forEach { piles[claimant].add(table.removeAt(it)) }
+        require(awaitingTurnAdvance && claimant in 0 until players && claimant != m.actor)
+        require(legal(groups,m.rank))
+        val captured = groups.flatten().toSet()
+        if(m.playedOnTable) {
+            val playedIndex = table.indexOf(m.playedCard)
+            require(playedIndex >= 0 && playedIndex !in captured)
+        }
+        val cards = captured.sortedDescending().map { table.removeAt(it) }
+        piles[claimant].addAll(cards)
+        if(m.playedOnTable) {
+            val playedIndex = table.indexOf(m.playedCard)
+            require(playedIndex >= 0)
+            piles[claimant].add(table.removeAt(playedIndex))
+        }
         lastCaptor = claimant
-        if(table.isEmpty() && team(claimant) == team(m.actor) && !roundOver) awardTabr(claimant)
-        missed = null
+        val finalMove = deck.isEmpty() && hands.all { it.isEmpty() }
+        if(table.isEmpty() && team(claimant) == team(m.actor) && !finalMove) awardTabr(claimant)
+        // Allow further claims only if another independent combination remains.
+        if(hasCombination(m.rank, null)) {
+            missed = m.copy(playedOnTable = false)
+        } else {
+            missed = null
+            advance()
+        }
     }
     private fun scoreRound() {
         val cards = List(2) { t -> piles.indices.filter { team(it) == t }.flatMap { piles[it] } }
