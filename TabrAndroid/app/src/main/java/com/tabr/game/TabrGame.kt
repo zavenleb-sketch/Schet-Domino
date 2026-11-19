@@ -19,7 +19,8 @@ class TabrGame(val players: Int, val target: Int) {
     var roundOver = false; private set
     var matchOver = false; private set
     var round = 0; private set
-    data class Missed(val actor: Int, val rank: Int, val playedOnTable: Boolean, val playedCard: Card)\n    private var awaitingTurnAdvance = false
+    data class Missed(val actor: Int, val rank: Int, val playedOnTable: Boolean, val playedCard: Card)
+    private var awaitingTurnAdvance = false
     var missed: Missed? = null; private set
     fun team(player: Int) = if(players == 4) player % 2 else player
     fun startRound() {
