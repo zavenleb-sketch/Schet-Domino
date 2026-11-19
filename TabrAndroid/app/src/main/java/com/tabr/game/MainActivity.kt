@@ -127,7 +127,7 @@ fun TabrScreen() {
     var selected by remember { mutableStateOf(setOf<Int>()) }
     var mode by remember { mutableIntStateOf(2) }
     var target by remember { mutableIntStateOf(31) }
-    var message by remember { mutableStateOf("Выберите карты стола, затем свою карту") }
+    var message by remember { mutableStateOf("Выберите карты стола, затем свою карту") }\n    var claimant by remember { mutableIntStateOf(-1) }
     val g = game
     Column(Modifier.fillMaxSize().background(ink).padding(horizontal = 12.dp, vertical = 5.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Row(Modifier.fillMaxWidth(),verticalAlignment = Alignment.CenterVertically,horizontalArrangement = Arrangement.SpaceBetween) {
@@ -161,7 +161,7 @@ fun TabrScreen() {
             val currentRevision = revision
             val tableCards = remember(g,currentRevision) { g.table.toList() }
             val handCards = remember(g,currentRevision) { g.hands[g.turn].toList() }
-            val turn = g.turn
+            val turn = g.turn\n            val pending = g.missed
             BoxWithConstraints(Modifier.fillMaxWidth().weight(1f).background(felt,RoundedCornerShape(28.dp))
                 .border(2.dp,gold,RoundedCornerShape(28.dp))) {
                 val w = maxWidth
@@ -185,14 +185,14 @@ fun TabrScreen() {
                         if(!g.roundOver) selected = if(i in selected) selected-i else selected+i
                     }
                 }
-                Text("ИГРОК ${turn+1} · ВАШ ХОД",color = gold,fontSize = 11.sp,fontWeight = FontWeight.Bold,
+                Text(if(pending != null) "ПЕРЕХВАТ · ХОД ИГРОКА ${pending.actor+1}" else "ИГРОК ${turn+1} · ВАШ ХОД",color = gold,fontSize = 11.sp,fontWeight = FontWeight.Bold,
                     modifier = Modifier.align(Alignment.BottomCenter).background(ink,RoundedCornerShape(topStart = 10.dp,topEnd = 10.dp)).padding(horizontal = 14.dp,vertical = 3.dp))
             }
             Spacer(Modifier.height(4.dp))
             Row(Modifier.fillMaxWidth(),verticalAlignment = Alignment.CenterVertically) {
                 Text("Игрок ${turn+1}",color = gold,fontSize = 12.sp)
                 Fan(handCards,emptySet(),Modifier.weight(1f)) { i ->
-                    if(g.roundOver || g.matchOver) return@Fan
+                    if(g.roundOver || g.matchOver || g.missed != null) return@Fan
                     val card = handCards.getOrNull(i) ?: return@Fan
                     val index = g.hands[g.turn].indexOf(card)
                     if(index < 0) { message = "Повторите выбор карты"; return@Fan }
@@ -204,7 +204,7 @@ fun TabrScreen() {
                     try {
                         g.play(index,groups)
                         selected = emptySet()
-                        message = "Ход выполнен"
+                        message = if(g.missed != null) "Можно перехватить пропущенные карты" else "Ход выполнен"
                         revision++
                     } catch(e: IllegalArgumentException) {
                         selected = emptySet()
@@ -219,6 +219,45 @@ fun TabrScreen() {
                 TextButton(onClick = { selected = emptySet() }) { Text("Сброс",color = gold,fontSize = 11.sp) }
                 if(g.roundOver && !g.matchOver) Button(onClick = { g.startRound(); selected = emptySet(); revision++ },colors = ButtonDefaults.buttonColors(containerColor = gold,contentColor = ink)) { Text("Новая раздача",fontSize = 11.sp) }
                 if(g.matchOver) Text("Матч окончен",color = gold)
+            }
+            if(pending != null) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                    Text("Перехват:",color = gold,fontSize = 11.sp)
+                    (0 until g.players).filter { it != pending.actor }.forEach { p ->
+                        Button(onClick = { claimant = p; message = "Игрок ${p+1}: выберите пропущенные карты на столе" },
+                            contentPadding = PaddingValues(horizontal = 9.dp,vertical = 0.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = if(claimant == p) gold else Color.DarkGray,contentColor = if(claimant == p) ink else ivory),
+                            modifier = Modifier.height(32.dp)) { Text("№${p+1}",fontSize = 11.sp) }
+                    }
+                    Button(onClick = {
+                        if(claimant !in 0 until g.players || claimant == pending.actor) {
+                            message = "Сначала выберите игрока-перехватчика"
+                        } else {
+                            val playedIndex = if(pending.playedOnTable) g.table.indexOf(pending.playedCard) else -1
+                            val effective = selected - playedIndex
+                            val groups = captureGroups(g.table,effective,pending.rank)
+                            if(groups == null || groups.isEmpty()) {
+                                message = "Выберите комбинации по ${pending.rank}. Сыгранная карта заберётся автоматически."
+                            } else try {
+                                g.claimMissed(claimant,groups)
+                                selected = emptySet()
+                                claimant = -1
+                                message = "Перехват выполнен"
+                                revision++
+                            } catch(e: IllegalArgumentException) { message = "Неверная комбинация для перехвата" }
+                            catch(e: IllegalStateException) { message = "Перехват уже завершён" }
+                        }
+                    },contentPadding = PaddingValues(horizontal = 9.dp,vertical = 0.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = gold,contentColor = ink),
+                        modifier = Modifier.height(32.dp)) { Text("Забрать",fontSize = 11.sp) }
+                    TextButton(onClick = {
+                        g.passClaims()
+                        selected = emptySet()
+                        claimant = -1
+                        message = "Продолжаем игру"
+                        revision++
+                    }) { Text("Пропустить",color = gold,fontSize = 11.sp) }
+                }
             }
             Text(message,color = ivory,fontSize = 10.sp,maxLines = 1)
         }
